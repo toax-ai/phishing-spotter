@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phishing Spotter</title>
+<style>
+  /* ---------- 1. STYLE: colours live in variables so dark mode is easy ---------- */
+  :root {
+    --bg: #f3f0fa; --card: #ffffff; --text: #1d2733; --muted: #5d6b7a;
+    --line: #ddd5f0; --brand: #6d3fd1; --good: #1a7f4b; --bad: #c2362b;
+    --good-bg: #e4f4ec; --bad-bg: #fbe8e6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15101f; --card: #201830; --text: #ece8f5; --muted: #a79bc0;
+      --line: #342848; --brand: #b18cff; --good: #5fd39a; --bad: #ff8b80;
+      --good-bg: #17352a; --bad-bg: #3a1f1c;
+    }
+  }++
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.5 Georgia, "Times New Roman", serif; }
+  main { max-width: 620px; margin: 0 auto; padding: 20px 16px 48px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  .bar { display: flex; justify-content: space-between; color: var(--muted);
+         font-family: system-ui, sans-serif; font-size: .9rem; margin-bottom: 10px; }
+
+  /* The fake email "window" is the memorable part of the design */
+  .mail { background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .head { padding: 14px 16px; border-bottom: 1px solid var(--line); font-family: system-ui, sans-serif; font-size: .92rem; }
+  .head b { font-size: 1.02rem; display: block; margin-bottom: 4px; }
+  .addr { color: var(--muted); word-break: break-all; }
+  .body { padding: 16px; }
+  .body p { margin: 0 0 12px; }
+  .link { color: var(--brand); text-decoration: underline; word-break: break-all;
+          font-family: system-ui, sans-serif; font-size: .9rem; }
+
+  .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+  button { font: 600 1rem system-ui, sans-serif; padding: 14px; border-radius: 8px;
+           border: 2px solid var(--line); background: var(--card); color: var(--text); cursor: pointer; }
+  button:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+  button.safe:hover:not(:disabled) { border-color: var(--good); }
+  button.phish:hover:not(:disabled) { border-color: var(--bad); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.next { grid-column: 1 / -1; background: var(--brand); border-color: var(--brand); color: #fff; }
+
+  .result { margin-top: 14px; padding: 14px 16px; border-radius: 10px;
+            font-family: system-ui, sans-serif; font-size: .95rem; }
+  .result.good { background: var(--good-bg); border-left: 5px solid var(--good); }
+  .result.bad { background: var(--bad-bg); border-left: 5px solid var(--bad); }
+  .result strong { display: block; margin-bottom: 4px; }
+  .hidden { display: none; }
+  .end { text-align: center; padding: 28px 16px; }
+  .big { font-size: 2.6rem; font-weight: 700; margin: 6px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Phishing Spotter</h1>
+  <p class="sub">Read each email. Is it safe, or is it a phishing attempt?</p>
+
+  <div id="game">
+    <div class="bar"><span id="progress"></span><span id="score"></span></div>
+    <div class="mail">
+      <div class="head">
+        <b id="subject"></b>
+        <div id="from"></div>
+        <div class="addr" id="addr"></div>
+      </div>
+      <div class="body" id="body"></div>
+    </div>
+    <div class="btns">
+      <button class="safe" id="btnSafe">Safe</button>
+      <button class="phish" id="btnPhish">Phishing</button>
+      <button class="next hidden" id="btnNext">Next email</button>
+    </div>
+    <div class="result hidden" id="result" role="status" aria-live="polite"></div>
+  </div>
+
+  <div id="end" class="mail end hidden">
+    <div>Final score</div>
+    <div class="big" id="finalScore"></div>
+    <p id="verdict"></p>
+    <button class="next" id="btnAgain" style="width:100%">Play again</button>
+  </div>
+</main>
+
+<script>
+/* ---------- 2. DATA: each email is a plain object. Add your own to extend the game! ---------- */
+const EMAILS = [
+  { subject: "RE: Invoice 4471, updated bank details",
+    from: "Larry(Westline Supplies)", addr: "Larry@westline-supplies.com",
+    body: ["Hi, following up our thread. our bank has changed, so please send this month payment to the new account below. same ammount, same due date."," sort code 20-45-17, Account 60341395"],
+    link: null, phishing: true,
+    why: "The domain is real and the reply sits in a geniue thread, but his account was compromised. Any bank detail change must be confirmed by calling a number you already have, never one from the email." },
+
+  { subject: "Your order has shipped",
+    from: "Amazon", addr: "shipment-tracking@amazon.com",
+    body: ["Hi Sam, your order #114-2231 is on its way. You can track it any time in Your Orders on the Amazon app."],
+    link: null,
+    phishing: false,
+    why: "Legitimate domain, no urgent demands, and it tells you to use the app instead of clicking a link." },
+
+  { subject: "Invoice attached: please open",
+    from: "Accounts", addr: "billing@gmail-invoices.net",
+    body: ["Hello, find the attached invoice 8841.zip. Open it today to avoid a late fee."],
+    link: null,
+    phishing: true,
+    why: "Unexpected attachment, a .zip file, a pressure deadline, and a random domain that has nothing to do with Gmail." },
+
+  { subject: "Recipt: $589.99 payment to Danaxcare",
+    from: "Danaxcare Billing",addr: "billing@danaxcare-recipts.com",
+    body: ["Thank you for your purchase. Your card has been charged $589.99 for a 2-year subscription.", "if you did not authorise this charge, call our refund desk immediately on 1-888-666-0258"],
+    link: null,
+    phishing: true,
+    why: "There is no link to check, which is the trick. you are ment to phone the number, and the agent then ask for remote acess or banking details .if you dont recognise a charge , contact your bank through the number on your card." },
+
+  { subject: "CEO request: urgent gift cards",
+    from: "Dana Whitfield (CEO)", addr: "dana.whitfield.ceo@outlook.com",
+    body: ["Are you at your desk? I'm in a meeting and need 5 gift cards for a client. Buy them and send me the codes. Keep this between us."],
+    link: null,
+    phishing: true,
+    why: "Classic CEO fraud: a personal email address, secrecy, urgency, and a request for gift card codes. Always verify through another channel." },
+
+  { subject: "You won a free iPhone 16!",
+    from: "Rewards Center", addr: "winner@rewards-claim-now.xyz",
+    body: ["Congratulations! You were selected from 10,000 users. Claim your prize in the next 10 minutes."],
+    link: "http://rewards-claim-now.xyz/claim?id=88213",
+    phishing: true,
+    why: "You never entered a contest, the prize is too good to be true, the timer adds pressure, and the .xyz domain is a red flag." },
+
+  { subject: "Bank details change on your payroll profile, expires friday",
+    from: "Payroll Team", addr: "payroll@yourcompany.com",
+    body: ["Hi, yesterday at 4:12pm a request was made to change the bank account on your payroll profile to one ending in 7731."," if thiswas you, no action needed and the change would apply to the next pay run. if it was not you, do not reply to this email. open the HR portal from your saved bookmark, cancelthe request under pending changes, or call the payroll desk on the number in the staff directory. this request lapses automatically on friday."],
+    link: null,
+    phishing: false,
+    why: "It mentions bank details, a deadline and a possible fraud, which are all classic scan signals, but the sender domain is genuine, there is no link , it asks for nothing, and it tells you to use your own bookmark or a directory number. A real scam would pushyou to click or reply. Judge what the email ask you to do, not just the word it uses."},
+
+  { subject: "Your bank: new login from Russia",
+    from: "Chase Alerts", addr: "alerts@chase.com.secure-login.co",
+    body: ["We blocked a suspicious login. Confirm your details immediately to keep your account active."],
+    link: "http://chase.com.secure-login.co/confirm",
+    phishing: true,
+    why: "Read a domain from right to left: the real domain is secure-login.co, and chase.com is just a decoy in front of it." }
+];
+
+/* ---------- 3. STATE: variables that remember where the player is ---------- */
+let order, index, score, answered;
+
+/* Shortcut for finding page elements */
+const $ = id => document.getElementById(id);
+
+/* Fisher-Yates shuffle: a fair way to randomise the order */
+function shuffle(list) {
+  const a = [...list];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/* ---------- 4. LOGIC ---------- */
+function start() {
+  order = shuffle(EMAILS); index = 0; score = 0;
+  $("end").classList.add("hidden");
+  $("game").classList.remove("hidden");
+  showEmail();
+}
+
+function showEmail() {
+  const e = order[index];
+  answered = false;
+  $("progress").textContent = "Email " + (index + 1) + " of " + order.length;
+  $("score").textContent = "Score: " + score;
+  $("subject").textContent = e.subject;
+  $("from").textContent = "From: " + e.from;
+  $("addr").textContent = "<" + e.addr + ">";
+
+  /* textContent (not innerHTML) is a security habit: it can never run injected code */
+  const body = $("body");
+  body.innerHTML = "";
+  e.body.forEach(t => { const p = document.createElement("p"); p.textContent = t; body.appendChild(p); });
+  if (e.link) {
+    const a = document.createElement("span");
+    a.className = "link"; a.textContent = e.link; body.appendChild(a);
+  }
+
+  $("btnSafe").disabled = false; $("btnPhish").disabled = false;
+  $("btnNext").classList.add("hidden");
+  $("result").classList.add("hidden");
+}
+
+function answer(saidPhishing) {
+  if (answered) return;           // stop double-clicks counting twice
+  answered = true;
+  const e = order[index];
+  const correct = saidPhishing === e.phishing;
+  if (correct) score++;
+
+  const box = $("result");
+  box.className = "result " + (correct ? "good" : "bad");
+  box.innerHTML = "";
+  const title = document.createElement("strong");
+  title.textContent = (correct ? "Correct. " : "Not quite. ") +
+                      "This was " + (e.phishing ? "phishing." : "a safe email.");
+  const why = document.createElement("span");
+  why.textContent = e.why;
+  box.append(title, why);
+
+  $("score").textContent = "Score: " + score;
+  $("btnSafe").disabled = true; $("btnPhish").disabled = true;
+  $("btnNext").textContent = index === order.length - 1 ? "See results" : "Next email";
+  $("btnNext").classList.remove("hidden");
+}
+
+function next() {
+  index++;
+  if (index < order.length) showEmail(); else finish();
+}
+
+function finish() {
+  $("game").classList.add("hidden");
+  $("end").classList.remove("hidden");
+  $("finalScore").textContent = score + " / " + order.length;
+  const pct = score / order.length;
+  $("verdict").textContent =
+    pct === 1 ? "Perfect. You'd make a great security analyst." :
+    pct >= 0.7 ? "Solid. Review the explanations you missed and try again." :
+    "Phishers are counting on that. Play again and check sender domains first.";
+}
+
+/* ---------- 5. EVENTS: connect buttons to functions ---------- */
+$("btnSafe").addEventListener("click", () => answer(false));
+$("btnPhish").addEventListener("click", () => answer(true));
+$("btnNext").addEventListener("click", next);
+$("btnAgain").addEventListener("click", start);
+
+start();
+</script>
+</body>
+</html>
